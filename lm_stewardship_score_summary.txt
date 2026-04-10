@@ -1,0 +1,25 @@
+
+Call:
+lm(formula = stewardship_score ~ did_total + access_pct_final + 
+    watch_pct + reserve_pct + broad_proxy_pct + ast_pct, data = model_dat)
+
+Residuals:
+       Min         1Q     Median         3Q        Max 
+-2.305e-14 -4.335e-15  1.150e-15  5.414e-15  1.367e-14 
+
+Coefficients:
+                   Estimate Std. Error    t value Pr(>|t|)    
+(Intercept)       5.000e+01  5.659e-14  8.836e+14   <2e-16 ***
+did_total         9.860e-16  6.238e-16  1.581e+00     0.14    
+access_pct_final  3.000e-01  4.167e-16  7.199e+14   <2e-16 ***
+watch_pct        -2.000e-01  6.141e-16 -3.257e+14   <2e-16 ***
+reserve_pct      -1.000e-01  1.124e-14 -8.894e+12   <2e-16 ***
+broad_proxy_pct  -2.000e-01  3.895e-16 -5.135e+14   <2e-16 ***
+ast_pct           2.000e-01  1.921e-16  1.041e+15   <2e-16 ***
+---
+Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+
+Residual standard error: 9.856e-15 on 12 degrees of freedom
+Multiple R-squared:      1,	Adjusted R-squared:      1 
+F-statistic: 2.185e+30 on 6 and 12 DF,  p-value: < 2.2e-16
+

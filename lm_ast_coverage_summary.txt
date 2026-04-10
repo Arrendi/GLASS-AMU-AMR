@@ -1,0 +1,24 @@
+
+Call:
+lm(formula = ast_pct ~ did_total + access_pct_final + watch_pct + 
+    reserve_pct + broad_proxy_pct, data = model_dat)
+
+Residuals:
+    Min      1Q  Median      3Q     Max 
+-33.630  -2.909   1.359   8.676  16.769 
+
+Coefficients:
+                 Estimate Std. Error t value Pr(>|t|)  
+(Intercept)      153.5366    69.7420   2.201   0.0464 *
+did_total         -0.5787     0.8863  -0.653   0.5252  
+access_pct_final  -0.1257     0.6008  -0.209   0.8375  
+watch_pct         -0.4605     0.8775  -0.525   0.6086  
+reserve_pct       -2.0761    16.2264  -0.128   0.9001  
+broad_proxy_pct   -0.4158     0.5504  -0.755   0.4635  
+---
+Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+
+Residual standard error: 14.23 on 13 degrees of freedom
+Multiple R-squared:  0.2535,	Adjusted R-squared:  -0.03358 
+F-statistic: 0.883 on 5 and 13 DF,  p-value: 0.5194
+
