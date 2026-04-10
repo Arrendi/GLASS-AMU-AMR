@@ -1,0 +1,519 @@
+# ============================================================
+# GLASS AMU/AMR Project
+# Global Antibiotic Stewardship Profiles, AWaRe Composition,
+# and Surveillance Readiness
+# ============================================================
+
+# -----------------------------
+# 1) Setup
+# -----------------------------
+required_packages <- c(
+  "dplyr",
+  "readr",
+  "tidyr",
+  "stringr",
+  "forcats",
+  "ggplot2",
+  "janitor",
+  "scales",
+  "cluster",
+  "purrr")
+
+installed <- rownames(installed.packages())
+for (pkg in required_packages) {
+  if (!pkg %in% installed) install.packages(pkg, dependencies = TRUE)
+}
+invisible(lapply(required_packages, library, character.only = TRUE))
+
+theme_set(theme_minimal(base_size = 12))
+
+# -----------------------------
+# 2) Paths
+# -----------------------------
+file_country_totals <- "optionA_country_totals.csv"
+file_testing_cov    <- "Testing_coverage.csv"
+file_aware          <- "amu_AWaRe.csv"
+file_atc3           <- "amu_pharmacological.csv"
+file_atc4           <- "amu_atc4.csv"
+
+output_dir <- "amr_glass_project_outputs"
+dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
+
+# -----------------------------
+# 3) Utilities
+# -----------------------------
+clean_country <- function(x) {
+  x %>%
+    as.character() %>%
+    str_squish() %>%
+    str_replace_all("T<U\\+00FC>rkiye", "Türkiye") %>%
+    str_replace_all("Netherlands \\(Kingdom of the\\)", "Netherlands") %>%
+    str_replace_all("United Kingdom of Great Britain and Northern Ireland", "United Kingdom") %>%
+    str_replace_all("Russian Federation", "Russia") %>%
+    str_replace_all("Republic of Moldova", "Moldova")
+}
+
+safe_numeric <- function(x) {
+  suppressWarnings(as.numeric(x))
+}
+
+mode_label <- function(x) {
+  x <- x[!is.na(x) & x != ""]
+  if (length(x) == 0) return(NA_character_)
+  names(sort(table(x), decreasing = TRUE))[1]
+}
+
+save_plot <- function(plot_obj, filename, width = 9, height = 6) {
+  ggsave(
+    filename = file.path(output_dir, filename),
+    plot = plot_obj,
+    width = width,
+    height = height,
+    dpi = 300
+  )
+}
+
+# -----------------------------
+# 4) Read data
+# -----------------------------
+country_totals_raw <- read_csv(file_country_totals, show_col_types = FALSE) %>%
+  clean_names()
+
+testing_cov_raw <- read_csv(file_testing_cov, show_col_types = FALSE) %>%
+  clean_names()
+
+aware_raw <- read_csv(file_aware, show_col_types = FALSE) %>%
+  clean_names()
+
+atc3_raw <- read_csv(file_atc3, show_col_types = FALSE) %>%
+  clean_names()
+
+atc4_raw <- read_csv(file_atc4, show_col_types = FALSE) %>%
+  clean_names()
+
+# -----------------------------
+# 5) Standardise inputs
+# -----------------------------
+country_totals <- country_totals_raw %>%
+  mutate(
+    country = clean_country(country_name),
+    who_region = who_region_name,
+    did_total = safe_numeric(did_total),
+    access_did = safe_numeric(access_did),
+    access_pct = safe_numeric(access_pct)) %>%
+  transmute(
+    country_code,
+    country,
+    who_region,
+    did_total,
+    access_did,
+    access_pct)
+
+testing_cov_raw <- readr::read_csv(file_testing_cov, show_col_types = FALSE) %>%
+  janitor::clean_names()
+
+names(testing_cov_raw)
+
+testing_cov <- testing_cov_raw %>%
+  rename(
+    country_raw = country_territory_area,
+    bci_per_million_raw = total_acinetobacter_spp_bc_is_per_million_population,
+    abs_bci_raw = absolute_number_of_acinetobacter_spp_bc_is,
+    ast_bci_per_million_raw = total_acinetobacter_spp_bc_is_with_ast_carbapenems_per_million_population,
+    abs_bci_with_ast_raw = absolute_number_of_acinetobacter_spp_bc_is_with_ast_carbapenems,
+    ast_pct_raw = percent_of_acinetobacter_spp_bc_is_with_ast) %>%
+  mutate(
+    country = clean_country(country_raw),
+    bci_per_million = safe_numeric(bci_per_million_raw),
+    abs_bci = safe_numeric(abs_bci_raw),
+    ast_bci_per_million = safe_numeric(ast_bci_per_million_raw),
+    abs_bci_with_ast = safe_numeric(abs_bci_with_ast_raw),
+    ast_pct = safe_numeric(ast_pct_raw)) %>%
+  transmute(
+    country,
+    bci_per_million,
+    abs_bci,
+    ast_bci_per_million,
+    abs_bci_with_ast,
+    ast_pct)
+
+aware <- aware_raw %>%
+  rename(
+    country_raw = country_territory_area,
+    region_raw = who_region_name,
+    aware_raw_name = awr_name,
+    did_raw = did,
+    pct_raw = percentage_percent) %>%
+  mutate(
+    country = clean_country(country_raw),
+    who_region = region_raw,
+    awr_name = stringr::str_squish(aware_raw_name),
+    did = safe_numeric(did_raw),
+    pct = safe_numeric(pct_raw)) %>%
+  transmute(
+    country,
+    who_region,
+    awr_name,
+    did,
+    pct)
+
+atc3 <- atc3_raw %>%
+  rename(
+    country_raw = country_territory_area,
+    region_raw = who_region_name,
+    atc3_raw_code = atc3,
+    atc_name_raw = atc_name,
+    did_raw = did,
+    pct_raw = percentage_percent) %>%
+  mutate(
+    country = clean_country(country_raw),
+    who_region = region_raw,
+    atc3 = stringr::str_squish(atc3_raw_code),
+    atc_name = stringr::str_squish(atc_name_raw),
+    did = safe_numeric(did_raw),
+    pct = safe_numeric(pct_raw)) %>%
+  transmute(
+    country,
+    who_region,
+    atc3,
+    atc_name,
+    did,
+    pct)
+
+atc4 <- atc4_raw %>%
+  mutate(
+    country = clean_country(country_territory_area),
+    who_region = who_region_name,
+    atc4 = str_squish(atc4),
+    atc_name = str_squish(atc_name),
+    did = safe_numeric(did),
+    pct = safe_numeric(percentage_percent))
+
+# -----------------------------
+# 6) AWaRe summaries
+# -----------------------------
+aware_summary <- aware %>%
+  mutate(
+    aware_group = case_when(
+      str_to_lower(awr_name) == "access" ~ "Access",
+      str_to_lower(awr_name) == "watch" ~ "Watch",
+      str_to_lower(awr_name) == "reserve" ~ "Reserve",
+      TRUE ~ awr_name)) %>%
+  group_by(country, who_region, aware_group) %>%
+  summarise(
+    did = sum(did, na.rm = TRUE),
+    pct = sum(pct, na.rm = TRUE),
+    .groups = "drop")
+
+aware_wide <- aware_summary %>%
+  select(country, aware_group, did, pct) %>%
+  pivot_wider(
+    names_from = aware_group,
+    values_from = c(did, pct),
+    values_fill = 0) %>%
+  rename(
+    access_did_from_aware = did_Access,
+    watch_did = did_Watch,
+    reserve_did = did_Reserve,
+    access_pct_from_aware = pct_Access,
+    watch_pct = pct_Watch,
+    reserve_pct = pct_Reserve)
+
+# -----------------------------
+# 7) ATC3 summaries
+# -----------------------------
+atc3_summary <- atc3 %>%
+  group_by(country, atc3, atc_name) %>%
+  summarise(
+    did = sum(did, na.rm = TRUE),
+    pct = sum(pct, na.rm = TRUE),
+    .groups = "drop")
+
+top_atc3 <- atc3_summary %>%
+  group_by(country) %>%
+  arrange(desc(did), .by_group = TRUE) %>%
+  mutate(rank = row_number()) %>%
+  filter(rank <= 3) %>%
+  ungroup()
+
+top_atc3_wide <- top_atc3 %>%
+  transmute(
+    country,
+    rank,
+    label = paste0(atc_name, " [", round(pct, 1), "%]")) %>%
+  pivot_wider(
+    names_from = rank,
+    values_from = label,
+    names_prefix = "top_atc3_")
+
+broad_spectrum_atc3 <- c("J01C", "J01D", "J01F", "J01M")
+
+broad_proxy <- atc3_summary %>%
+  mutate(is_broad_proxy = atc3 %in% broad_spectrum_atc3) %>%
+  group_by(country) %>%
+  summarise(
+    broad_proxy_did = sum(did[is_broad_proxy], na.rm = TRUE),
+    broad_proxy_pct = sum(pct[is_broad_proxy], na.rm = TRUE),
+    .groups = "drop")
+
+# -----------------------------
+# 8) ATC4 summaries
+# -----------------------------
+atc4_summary <- atc4 %>%
+  group_by(country, atc4, atc_name) %>%
+  summarise(
+    did = sum(did, na.rm = TRUE),
+    pct = sum(pct, na.rm = TRUE),
+    .groups = "drop")
+
+top_atc4 <- atc4_summary %>%
+  group_by(country) %>%
+  arrange(desc(did), .by_group = TRUE) %>%
+  mutate(rank = row_number()) %>%
+  filter(rank <= 5) %>%
+  ungroup()
+
+top_atc4_wide <- top_atc4 %>%
+  transmute(
+    country,
+    rank,
+    label = paste0(atc_name, " [", round(pct, 1), "%]")) %>%
+  pivot_wider(
+    names_from = rank,
+    values_from = label,
+    names_prefix = "top_atc4_")
+
+# -----------------------------
+# 9) Analytic panel
+# -----------------------------
+panel <- country_totals %>%
+  left_join(aware_wide, by = "country") %>%
+  left_join(broad_proxy, by = "country") %>%
+  left_join(testing_cov, by = "country") %>%
+  left_join(top_atc3_wide, by = "country") %>%
+  left_join(top_atc4_wide, by = "country") %>%
+  mutate(
+    access_pct_final = coalesce(access_pct, access_pct_from_aware),
+    access_watch_ratio = if_else(!is.na(watch_pct) & watch_pct > 0, access_pct_final / watch_pct, NA_real_),
+    non_access_pct = 100 - access_pct_final)
+
+# -----------------------------
+# 10) Composite stewardship score
+# -----------------------------
+panel <- panel %>%
+  mutate(
+    access_component = access_pct_final,
+    watch_component = 100 - watch_pct,
+    reserve_component = 100 - reserve_pct,
+    broad_component = 100 - broad_proxy_pct,
+    testing_component = ast_pct,
+    stewardship_score =
+      0.30 * access_component +
+      0.20 * watch_component +
+      0.10 * reserve_component +
+      0.20 * broad_component +
+      0.20 * testing_component)
+
+# -----------------------------
+# 11) Country typology
+# -----------------------------
+cluster_dat <- panel %>%
+  select(
+    country,
+    access_pct_final,
+    watch_pct,
+    reserve_pct,
+    broad_proxy_pct,
+    ast_pct,
+    did_total,
+    stewardship_score) %>%
+  drop_na()
+
+X <- cluster_dat %>%
+  select(-country) %>%
+  scale()
+
+set.seed(123)
+km4 <- kmeans(X, centers = 4, nstart = 100)
+
+cluster_dat <- cluster_dat %>%
+  mutate(cluster = factor(km4$cluster))
+
+cluster_profiles <- cluster_dat %>%
+  group_by(cluster) %>%
+  summarise(
+    mean_did = mean(did_total, na.rm = TRUE),
+    mean_access = mean(access_pct_final, na.rm = TRUE),
+    mean_watch = mean(watch_pct, na.rm = TRUE),
+    mean_reserve = mean(reserve_pct, na.rm = TRUE),
+    mean_broad = mean(broad_proxy_pct, na.rm = TRUE),
+    mean_testing = mean(ast_pct, na.rm = TRUE),
+    mean_score = mean(stewardship_score, na.rm = TRUE),
+    .groups = "drop")
+
+cluster_labels <- cluster_profiles %>%
+  mutate(
+    cluster_label = case_when(
+      mean_score == max(mean_score) ~ "Balanced stewardship / stronger readiness",
+      mean_watch == max(mean_watch) ~ "Watch-heavy profile",
+      mean_broad == max(mean_broad) ~ "Broad-spectrum-heavy profile",
+      mean_testing == min(mean_testing) ~ "Lower surveillance readiness",
+      TRUE ~ "Mixed profile")) %>%
+  select(cluster, cluster_label)
+
+cluster_dat <- cluster_dat %>%
+  left_join(cluster_labels, by = "cluster")
+
+panel <- panel %>%
+  left_join(cluster_dat %>% select(country, cluster, cluster_label), by = "country")
+
+# -----------------------------
+# 12) Flags and rankings
+# -----------------------------
+panel <- panel %>%
+  mutate(
+    flag_low_access = access_pct_final < 60,
+    flag_high_watch = watch_pct > 35,
+    flag_high_reserve = reserve_pct > 5,
+    flag_high_broad = broad_proxy_pct > 50,
+    flag_low_testing = ast_pct < 80
+  ) %>%
+  arrange(desc(stewardship_score)) %>%
+  mutate(rank_stewardship = row_number())
+
+# -----------------------------
+# 13) Outputs: tables
+# -----------------------------
+summary_table <- panel %>%
+  select(
+    rank_stewardship,
+    country,
+    who_region,
+    did_total,
+    access_pct_final,
+    watch_pct,
+    reserve_pct,
+    broad_proxy_pct,
+    ast_pct,
+    stewardship_score,
+    cluster_label,
+    top_atc3_1, top_atc3_2, top_atc3_3,
+    top_atc4_1, top_atc4_2, top_atc4_3, top_atc4_4, top_atc4_5 )
+
+top10 <- panel %>%
+  arrange(desc(stewardship_score)) %>%
+  slice(1:10) %>%
+  select(country, stewardship_score, access_pct_final, watch_pct, reserve_pct, ast_pct)
+
+bottom10 <- panel %>%
+  arrange(stewardship_score) %>%
+  slice(1:10) %>%
+  select(country, stewardship_score, access_pct_final, watch_pct, reserve_pct, ast_pct)
+
+write_csv(panel, file.path(output_dir, "glass_country_stewardship_panel.csv"))
+write_csv(summary_table, file.path(output_dir, "glass_country_summary_table.csv"))
+write_csv(cluster_profiles, file.path(output_dir, "glass_cluster_profiles.csv"))
+write_csv(top_atc3, file.path(output_dir, "glass_top_atc3_long.csv"))
+write_csv(top_atc4, file.path(output_dir, "glass_top_atc4_long.csv"))
+write_csv(top10, file.path(output_dir, "glass_top10_stewardship.csv"))
+write_csv(bottom10, file.path(output_dir, "glass_bottom10_stewardship.csv"))
+
+# -----------------------------
+# 14) Outputs: plots
+# -----------------------------
+p_access <- panel %>%
+  arrange(access_pct_final) %>%
+  mutate(country = fct_reorder(country, access_pct_final)) %>%
+  ggplot(aes(x = access_pct_final, y = country)) +
+  geom_point(size = 2.4) +
+  geom_vline(xintercept = 60, linetype = 2, colour = "firebrick") +
+  labs(
+    title = "Country ranking by Access antibiotic share",
+    subtitle = "Red dashed line = 60% stewardship reference threshold",
+    x = "Access share (%)",
+    y = NULL)
+
+plot_score_dat <- panel %>%
+  ungroup() %>%
+  filter(!is.na(country), !is.na(stewardship_score), !is.na(cluster_label)) %>%
+  arrange(stewardship_score)
+
+plot_score_dat$country <- factor(
+  plot_score_dat$country,
+  levels = unique(plot_score_dat$country))
+
+p_score <- ggplot(plot_score_dat, aes(x = stewardship_score, y = country, colour = cluster_label)) +
+  geom_point(size = 2.6) +
+  labs(
+    title = "Composite stewardship and surveillance-readiness score",
+    x = "Stewardship score",
+    y = NULL,
+    colour = "Profile")
+
+p_watch_testing <- panel %>%
+  ggplot(aes(x = watch_pct, y = ast_pct, size = did_total)) +
+  geom_point(alpha = 0.8) +
+  geom_smooth(method = "lm", se = FALSE, linetype = 2, colour = "grey40") +
+  labs(
+    title = "Watch share versus AST testing coverage",
+    subtitle = "Bubble size reflects total DID",
+    x = "Watch share (%)",
+    y = "AST coverage (%)")
+
+p_broad_total <- panel %>%
+  ggplot(aes(x = did_total, y = broad_proxy_pct)) +
+  geom_point(size = 2.4, alpha = 0.85) +
+  geom_smooth(method = "lm", se = FALSE, linetype = 2, colour = "grey40") +
+  labs(
+    title = "Total antibiotic consumption versus broad-spectrum proxy",
+    x = "Total DID",
+    y = "Broad-spectrum proxy share (%)")
+
+heat_dat <- panel %>%
+  select(country, access_pct_final, watch_pct, reserve_pct, broad_proxy_pct, ast_pct) %>%
+  pivot_longer(-country, names_to = "indicator", values_to = "value")
+
+p_heat <- heat_dat %>%
+  mutate(country = fct_reorder(country, value, .fun = mean, .desc = TRUE, .na_rm = TRUE)) %>%
+  ggplot(aes(x = indicator, y = country, fill = value)) +
+  geom_tile() +
+  labs(
+    title = "Country heatmap of stewardship and readiness indicators",
+    x = NULL,
+    y = NULL,
+    fill = "Value")
+
+save_plot(p_access, "access_share_ranking.png", width = 9, height = 8)
+save_plot(p_score, "stewardship_score_ranking.png", width = 10, height = 8)
+save_plot(p_watch_testing, "watch_vs_testing.png", width = 9, height = 6)
+save_plot(p_broad_total, "did_vs_broad_proxy.png", width = 9, height = 6)
+save_plot(p_heat, "indicator_heatmap.png", width = 10, height = 8)
+
+# -----------------------------
+# 15) Exploratory model
+# -----------------------------
+model_dat <- panel %>%
+  select(country, ast_pct, did_total, access_pct_final, watch_pct, reserve_pct, broad_proxy_pct) %>%
+  drop_na()
+
+fit_ast <- lm(
+  ast_pct ~ did_total + access_pct_final + watch_pct + reserve_pct + broad_proxy_pct,
+  data = model_dat)
+
+capture.output(
+  summary(fit_ast),
+  file = file.path(output_dir, "lm_ast_coverage_summary.txt"))
+
+# -----------------------------
+# 16) Console summary
+# -----------------------------
+cat("\nTop 10 countries by stewardship score\n")
+print(top10)
+
+cat("\nBottom 10 countries by stewardship score\n")
+print(bottom10)
+
+cat("\nCluster profiles\n")
+print(cluster_profiles)
+
+cat("\nOutputs saved to:", output_dir, "\n")
