@@ -1,0 +1,335 @@
+# ============================================================
+# GLASS AMU/AMR Project
+# Global Antibiotic Stewardship Profiles, AWaRe Composition,
+# and Surveillance Readiness
+# Supplementary version with syndRomics + drc extension
+# ============================================================
+
+required_packages <- c(
+  "dplyr", "readr", "tidyr", "stringr", "forcats",
+  "ggplot2", "janitor", "scales", "cluster", "purrr",
+  "tibble")
+
+installed <- rownames(installed.packages())
+for (pkg in required_packages) {
+  if (!pkg %in% installed) install.packages(pkg, dependencies = TRUE)
+}
+invisible(lapply(required_packages, library, character.only = TRUE))
+
+theme_set(theme_minimal(base_size = 12))
+
+file_country_totals <- "optionA_country_totals.csv"
+file_testing_cov    <- "Testing_coverage.csv"
+file_aware          <- "amu_AWaRe.csv"
+file_atc3           <- "amu_pharmacological.csv"
+file_atc4           <- "amu_atc4.csv"
+
+output_dir <- "amr_glass_project_outputs"
+dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
+
+clean_country <- function(x) {
+  x %>%
+    as.character() %>%
+    stringr::str_squish() %>%
+    stringr::str_replace_all("T<U\\+00FC>rkiye", "Türkiye") %>%
+    stringr::str_replace_all("Netherlands \\(Kingdom of the\\)", "Netherlands") %>%
+    stringr::str_replace_all("United Kingdom of Great Britain and Northern Ireland", "United Kingdom") %>%
+    stringr::str_replace_all("Russian Federation", "Russia") %>%
+    stringr::str_replace_all("Republic of Moldova", "Moldova")
+}
+
+safe_numeric <- function(x) suppressWarnings(as.numeric(x))
+
+country_totals_raw <- readr::read_csv(file_country_totals, show_col_types = FALSE) %>% janitor::clean_names()
+testing_cov_raw    <- readr::read_csv(file_testing_cov, show_col_types = FALSE) %>% janitor::clean_names()
+aware_raw          <- readr::read_csv(file_aware, show_col_types = FALSE) %>% janitor::clean_names()
+atc3_raw           <- readr::read_csv(file_atc3, show_col_types = FALSE) %>% janitor::clean_names()
+atc4_raw           <- readr::read_csv(file_atc4, show_col_types = FALSE) %>% janitor::clean_names()
+
+country_totals <- country_totals_raw %>%
+  mutate(
+    country = clean_country(country_name),
+    who_region = who_region_name,
+    did_total = safe_numeric(did_total),
+    access_did = safe_numeric(access_did),
+    access_pct = safe_numeric(access_pct)) %>%
+  transmute(country_code, country, who_region, did_total, access_did, access_pct)
+
+testing_cov <- testing_cov_raw %>%
+  mutate(
+    country = clean_country(country_territory_area),
+    bci_per_million = safe_numeric(total_acinetobacter_spp_bc_is_per_million_population),
+    abs_bci = safe_numeric(absolute_number_of_acinetobacter_spp_bc_is),
+    ast_bci_per_million = safe_numeric(total_acinetobacter_spp_bc_is_with_ast_carbapenems_per_million_population),
+    abs_bci_with_ast = safe_numeric(absolute_number_of_acinetobacter_spp_bc_is_with_ast_carbapenems),
+    ast_pct = safe_numeric(percent_of_acinetobacter_spp_bc_is_with_ast)
+  ) %>%
+  transmute(country, bci_per_million, abs_bci, ast_bci_per_million, abs_bci_with_ast, ast_pct)
+
+aware <- aware_raw %>%
+  mutate(
+    country = clean_country(country_territory_area),
+    who_region = who_region_name,
+    awr_name = stringr::str_squish(awr_name),
+    did = safe_numeric(did),
+    pct = safe_numeric(percentage_percent)) %>%
+  transmute(country, who_region, awr_name, did, pct)
+
+atc3 <- atc3_raw %>%
+  mutate(
+    country = clean_country(country_territory_area),
+    who_region = who_region_name,
+    atc3 = stringr::str_squish(atc3),
+    atc_name = stringr::str_squish(atc_name),
+    did = safe_numeric(did),
+    pct = safe_numeric(percentage_percent)) %>%
+  transmute(country, who_region, atc3, atc_name, did, pct)
+
+atc4 <- atc4_raw %>%
+  mutate(
+    country = clean_country(country_territory_area),
+    who_region = who_region_name,
+    atc4 = stringr::str_squish(atc4),
+    atc_name = stringr::str_squish(atc_name),
+    did = safe_numeric(did),
+    pct = safe_numeric(percentage_percent)) %>%
+  transmute(country, who_region, atc4, atc_name, did, pct)
+
+aware_summary <- aware %>%
+  mutate(
+    aware_group = dplyr::case_when(
+      stringr::str_to_lower(awr_name) == "access" ~ "Access",
+      stringr::str_to_lower(awr_name) == "watch" ~ "Watch",
+      stringr::str_to_lower(awr_name) == "reserve" ~ "Reserve",
+      TRUE ~ awr_name)) %>%
+  group_by(country, who_region, aware_group) %>%
+  summarise(did = sum(did, na.rm = TRUE), pct = sum(pct, na.rm = TRUE), .groups = "drop")
+
+aware_wide <- aware_summary %>%
+  dplyr::select(country, aware_group, did, pct) %>%
+  tidyr::pivot_wider(
+    names_from = aware_group,
+    values_from = c(did, pct),
+    values_fill = 0) %>%
+  dplyr::rename(
+    access_did_from_aware = did_Access,
+    watch_did = did_Watch,
+    reserve_did = did_Reserve,
+    access_pct_from_aware = pct_Access,
+    watch_pct = pct_Watch,
+    reserve_pct = pct_Reserve)
+
+atc3_summary <- atc3 %>%
+  group_by(country, atc3, atc_name) %>%
+  summarise(did = sum(did, na.rm = TRUE), pct = sum(pct, na.rm = TRUE), .groups = "drop")
+
+top_atc3_wide <- atc3_summary %>%
+  group_by(country) %>%
+  arrange(desc(did), .by_group = TRUE) %>%
+  mutate(rank = row_number()) %>%
+  filter(rank <= 3) %>%
+  ungroup() %>%
+  transmute(country, rank, label = paste0(atc_name, " [", round(pct, 1), "%]")) %>%
+  pivot_wider(names_from = rank, values_from = label, names_prefix = "top_atc3_")
+
+broad_spectrum_atc3 <- c("J01C", "J01D", "J01F", "J01M")
+
+broad_proxy <- atc3_summary %>%
+  mutate(is_broad_proxy = atc3 %in% broad_spectrum_atc3) %>%
+  group_by(country) %>%
+  summarise(
+    broad_proxy_did = sum(did[is_broad_proxy], na.rm = TRUE),
+    broad_proxy_pct = sum(pct[is_broad_proxy], na.rm = TRUE),
+    .groups = "drop")
+
+atc4_summary <- atc4 %>%
+  group_by(country, atc4, atc_name) %>%
+  summarise(did = sum(did, na.rm = TRUE), pct = sum(pct, na.rm = TRUE), .groups = "drop")
+
+top_atc4_wide <- atc4_summary %>%
+  group_by(country) %>%
+  arrange(desc(did), .by_group = TRUE) %>%
+  mutate(rank = row_number()) %>%
+  filter(rank <= 5) %>%
+  ungroup() %>%
+  transmute(country, rank, label = paste0(atc_name, " [", round(pct, 1), "%]")) %>%
+  pivot_wider(names_from = rank, values_from = label, names_prefix = "top_atc4_")
+
+panel <- country_totals %>%
+  left_join(aware_wide, by = "country") %>%
+  left_join(broad_proxy, by = "country") %>%
+  left_join(testing_cov, by = "country") %>%
+  left_join(top_atc3_wide, by = "country") %>%
+  left_join(top_atc4_wide, by = "country") %>%
+  mutate(
+    access_pct_final = dplyr::coalesce(access_pct, access_pct_from_aware),
+    access_watch_ratio = dplyr::if_else(!is.na(watch_pct) & watch_pct > 0, access_pct_final / watch_pct, NA_real_),
+    stewardship_score =
+      0.30 * access_pct_final +
+      0.20 * (100 - watch_pct) +
+      0.10 * (100 - reserve_pct) +
+      0.20 * (100 - broad_proxy_pct) +
+      0.20 * ast_pct)
+
+plot_score_dat <- panel %>%
+  ungroup() %>%
+  filter(!is.na(country), !is.na(stewardship_score)) %>%
+  arrange(stewardship_score)
+
+plot_score_dat$country <- factor(plot_score_dat$country, levels = unique(plot_score_dat$country))
+
+p_score <- ggplot(plot_score_dat, aes(x = stewardship_score, y = country)) +
+  geom_point(size = 2.6) +
+  labs(title = "Composite stewardship and surveillance-readiness score",
+       x = "Stewardship score", y = NULL)
+
+ggsave(file.path(output_dir, "stewardship_score_ranking.png"), p_score, width = 10, height = 8, dpi = 300)
+
+heat_dat <- panel %>%
+  dplyr::ungroup() %>%
+  dplyr::select(country, access_pct_final, watch_pct, reserve_pct, broad_proxy_pct, ast_pct) %>%
+  tidyr::pivot_longer(-country, names_to = "indicator", values_to = "value")
+
+country_order <- heat_dat %>%
+  dplyr::group_by(country) %>%
+  dplyr::summarise(mean_value = mean(value, na.rm = TRUE), .groups = "drop") %>%
+  dplyr::arrange(dplyr::desc(mean_value)) %>%
+  dplyr::pull(country)
+
+heat_dat <- heat_dat %>%
+  dplyr::mutate(country = factor(country, levels = country_order))
+
+p_heat <- ggplot(heat_dat, aes(x = indicator, y = country, fill = value)) +
+  geom_tile(color = "white") +
+  scale_fill_viridis_c(na.value = "grey90") +
+  labs(title = "Country heatmap of stewardship and readiness indicators",
+       x = NULL, y = NULL, fill = "Value")
+
+ggsave(file.path(output_dir, "indicator_heatmap.png"), p_heat, 
+       width = 10, height = 8, dpi = 300)
+
+write_csv(panel, file.path(output_dir, 
+          "glass_country_stewardship_panel.csv"))
+
+# ------------------------------------------------------------
+# PCA / syndRomics layer
+# ------------------------------------------------------------
+# install.packages("remotes")
+# remotes::install_github("ucsf-ferguson-lab/syndRomics@*release")
+# library(syndRomics)
+
+pca_dat <- panel %>%
+  dplyr::ungroup() %>%
+  dplyr::select(
+    country,
+    access_pct_final,
+    watch_pct,
+    reserve_pct,
+    broad_proxy_pct,
+    ast_pct,
+    did_total,
+    access_watch_ratio) %>% tidyr::drop_na()
+
+X <- pca_dat %>%
+  dplyr::select(-country) %>%
+  scale(center = TRUE, scale = TRUE)
+
+rownames(X) <- pca_dat$country
+
+pca_fit <- prcomp(X, center = FALSE, scale. = FALSE)
+
+pca_scores <- as.data.frame(pca_fit$x) %>%
+  tibble::rownames_to_column("country")
+
+pca_loadings <- as.data.frame(pca_fit$rotation) %>%
+  tibble::rownames_to_column("variable")
+
+write.csv(pca_scores, file.path(output_dir, "glass_pca_scores.csv"), row.names = FALSE)
+write.csv(pca_loadings, file.path(output_dir, "glass_pca_loadings.csv"), row.names = FALSE)
+
+p_pca <- pca_scores %>%
+  ggplot(aes(x = PC1, y = PC2, label = country)) +
+  geom_point(size = 2.4, alpha = 0.85) +
+  labs(
+    title = "Country stewardship profile space",
+    subtitle = "PCA of GLASS stewardship and surveillance indicators",
+    x = "PC1", y = "PC2")
+
+ggsave(file.path(output_dir, "glass_pca_country_space.png"), p_pca, width = 9, height = 6, dpi = 300)
+
+# After installing syndRomics, inspect available helpers:
+# ls("package:syndRomics")
+# help(package = "syndRomics")
+
+# ------------------------------------------------------------
+# Exploratory nonlinear threshold module
+# ------------------------------------------------------------
+install.packages("drc")
+library(drc)
+
+dose_dat <- panel %>%
+  dplyr::select(country, watch_pct, ast_pct) %>%
+  dplyr::filter(!is.na(watch_pct), !is.na(ast_pct)) %>%
+  dplyr::arrange(watch_pct)
+
+m_ll4 <- drc::drm(ast_pct ~ watch_pct, data = dose_dat, fct = drc::LL.4())
+m_weibull <- drc::drm(ast_pct ~ watch_pct, data = dose_dat, fct = drc::W1.4())
+m_ln <- drc::drm(ast_pct ~ watch_pct, data = dose_dat, fct = drc::LN.4())
+AIC(m_ll4, m_weibull, m_ln)
+
+newdat <- data.frame(
+  watch_pct = seq(min(dose_dat$watch_pct), max(dose_dat$watch_pct), length.out = 200)
+)
+
+pred <- cbind(
+  newdat,
+  fitted = predict(m_ll4, newdata = newdat))
+
+p_drc <- ggplot(dose_dat, aes(watch_pct, ast_pct)) +
+  geom_point() +
+  geom_line(data = pred, aes(watch_pct, fitted), linewidth = 1) +
+  labs(
+    title = "Nonlinear association between Watch share and AST coverage",
+    x = "Watch share (%)",
+    y = "AST coverage (%)")
+
+ggsave(file.path(output_dir, "drc_watch_ast_curve.png"), p_drc, width = 8, height = 5, dpi = 300)
+
+# Optional benchmark-style threshold extraction
+# ED(m_ll4, 10, type = "absolute")
+
+# ------------------------------------------------------------
+# Exploratory nonlinear threshold module
+# ------------------------------------------------------------
+install.packages("drc")
+library(drc)
+
+dose_dat <- panel %>%
+  dplyr::select(country, watch_pct, ast_pct) %>%
+  dplyr::filter(!is.na(watch_pct), !is.na(ast_pct)) %>%
+  dplyr::arrange(watch_pct)
+
+m_ll4 <- drm(ast_pct ~ watch_pct, data = dose_dat, fct = LL.4())
+m_weibull <- drm(ast_pct ~ watch_pct, data = dose_dat, fct = W1.4())
+m_ln <- drm(ast_pct ~ watch_pct, data = dose_dat, fct = LN.4())
+
+AIC(m_ll4, m_weibull, m_ln)
+
+newdat <- data.frame(
+  watch_pct = seq(min(dose_dat$watch_pct), max(dose_dat$watch_pct), length.out = 200))
+
+pred <- cbind(newdat, fitted = predict(m_ll4, newdata = newdat))
+
+p_drc <- ggplot(dose_dat, aes(watch_pct, ast_pct)) +
+  geom_point() +
+  geom_line(data = pred, aes(watch_pct, fitted), linewidth = 1) +
+  labs(
+    title = "Nonlinear association between Watch share and AST coverage",
+    x = "Watch share (%)",
+    y = "AST coverage (%)")
+
+ggsave(file.path(output_dir, "drc_watch_ast_curve.png"), p_drc, width = 8, height = 5, dpi = 300)
+
+# Optional benchmark-style threshold extraction
+# ED(m_ll4, 10, type = "absolute")
+
